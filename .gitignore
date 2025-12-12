@@ -1,0 +1,20 @@
+requirements.txt
+requirements_python.txt
+node_modules/
+run_comparison.bat
+setup.bat
+*.md
+*.png
+*.txt
+*.pdf
+*.csv
+script.js
+__pycache__/
+
+# Virtual environment
+venv310/
+
+# Model weights (too large for GitHub)
+*.pt
+*.onnx
+*.task
