@@ -13,8 +13,21 @@ __pycache__/
 
 # Virtual environment
 venv310/
+.venv/
+.venv311/
+
+# Local IDE/workspace files
+.idea/
+.vscode/
+
+# Python cache artifacts
+*.pyc
+*.pyo
+*.pyd
 
 # Model weights (too large for GitHub)
 *.pt
 *.onnx
 *.task
+# Large datasets
+datasets/
