@@ -27,12 +27,15 @@ def run_async(source: str, model_path: str, device: str, conf: float) -> None:
     frame_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=1)
     result_queue: queue.Queue[Tuple[np.ndarray, float]] = queue.Queue(maxsize=1)
     stop_event = threading.Event()
+    capture_done = threading.Event()
+
+    infer_done = threading.Event()
 
     def capture_loop() -> None:
         while not stop_event.is_set():
             ok, frame = cap.read()
             if not ok:
-                stop_event.set()
+                capture_done.set()
                 break
             if frame_queue.full():
                 try:
@@ -43,9 +46,13 @@ def run_async(source: str, model_path: str, device: str, conf: float) -> None:
 
     def infer_loop() -> None:
         while not stop_event.is_set():
+            if capture_done.is_set() and frame_queue.empty():
+                break
             try:
                 frame = frame_queue.get(timeout=0.1)
             except queue.Empty:
+                if capture_done.is_set():
+                    break
                 continue
             t0 = time.time()
             results = model.predict(frame, device=device, conf=conf, verbose=False)
@@ -67,6 +74,7 @@ def run_async(source: str, model_path: str, device: str, conf: float) -> None:
                 except queue.Empty:
                     pass
             result_queue.put((annotated_frame, inf_ms))
+        infer_done.set()
 
     capture_thread = threading.Thread(target=capture_loop, daemon=True)
     infer_thread = threading.Thread(target=infer_loop, daemon=True)
@@ -80,6 +88,8 @@ def run_async(source: str, model_path: str, device: str, conf: float) -> None:
         try:
             frame, inf_ms = result_queue.get(timeout=0.1)
         except queue.Empty:
+            if capture_done.is_set() and infer_done.is_set():
+                break
             continue
 
         now = time.time()
