@@ -14,8 +14,8 @@ import cv2
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a short pose progress report.")
     parser.add_argument("--source", default="sample_video.mp4", help="Video path or webcam index.")
-    parser.add_argument("--model", default="yolov8m-pose.pt", help="YOLOv8 pose model path.")
-    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--model", default="yolo11s-pose.pt", help="YOLOv8 pose model path.")
+    parser.add_argument("--device", default="cuda", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--frames", type=int, default=30, help="How many frames to evaluate.")
     return parser.parse_args()
 

@@ -120,8 +120,8 @@ def run_async(source: str, model_path: str, device: str, conf: float) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Asynchronous video pipeline demo.")
     parser.add_argument("--source", default="0", help="Webcam index or video file path.")
-    parser.add_argument("--model", default="yolov8m-pose.pt")
-    parser.add_argument("--device", default="auto", help="auto, cpu, or cuda")
+    parser.add_argument("--model", default="yolo11s-pose.pt")
+    parser.add_argument("--device", default="cuda", help="auto, cpu, or cuda")
     parser.add_argument("--conf", type=float, default=0.35, help="Detection confidence threshold.")
     return parser.parse_args()
 
