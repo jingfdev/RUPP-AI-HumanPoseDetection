@@ -1,16 +1,10 @@
-# Core runtime requirements for the MediaPipe/OpenPose comparison scripts
-# Note: OpenPose Python bindings (pyopenpose) are NOT installable via pip.
-#       They are generated when you build OpenPose with BUILD_PYTHON=ON.
-
 numpy>=1.24,<3
 opencv-python>=4.8
 mediapipe>=0.10
-torch>=2.0
-ultralytics>=8.1
-onnx>=1.14
-onnxruntime-gpu>=1.17
-
-# Notebook / analysis (optional but used by Three_Model_Comparison.ipynb)
-matplotlib>=3.7
-pandas>=2.0
-jupyter>=1.0
+torch
+ultralytics
+onnx
+onnxruntime-gpu
+matplotlib
+pandas
+jupyter
