@@ -33,7 +33,7 @@ if not exist "!MODEL!" (
 echo Using model: !MODEL!
 echo.
 
-:: Run the asynchronous video pipeline with pose model on sample video
-python async_video_pipeline.py --source sample_video.mp4 --model !MODEL! --device auto --conf 0.35
+:: Run the asynchronous video pipeline with pose model on sample video in GPU-only mode
+python async_video_pipeline.py --source sample_video.mp4 --model !MODEL! --device cuda:0 --conf 0.35
 
 pause

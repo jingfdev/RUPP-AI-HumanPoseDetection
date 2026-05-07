@@ -12,6 +12,33 @@ import cv2
 import numpy as np
 
 
+def require_cuda_device(requested: str) -> str:
+    device = requested.strip().lower()
+    if device in {"auto", "cpu"}:
+        raise ValueError(
+            f"GPU-only mode is enabled. Unsupported device '{requested}'. "
+            "Use a CUDA device such as 'cuda' or 'cuda:0'."
+        )
+    if not device.startswith("cuda"):
+        raise ValueError(
+            f"Unsupported device '{requested}'. Only CUDA devices are allowed in GPU-only mode."
+        )
+
+    try:
+        import torch
+    except Exception as exc:
+        raise RuntimeError(
+            "PyTorch with CUDA support is required, but torch could not be imported."
+        ) from exc
+
+    if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
+        raise RuntimeError(
+            "GPU-only mode is enabled, but no CUDA-capable GPU is available to PyTorch."
+        )
+
+    return "cuda:0" if device == "cuda" else device
+
+
 def run_async(source: str, model_path: str, device: str, conf: float) -> None:
     from ultralytics import YOLO
 
@@ -121,19 +148,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Asynchronous video pipeline demo.")
     parser.add_argument("--source", default="0", help="Webcam index or video file path.")
     parser.add_argument("--model", default="yolo11s-pose.pt")
-    parser.add_argument("--device", default="cuda", help="auto, cpu, or cuda")
+    parser.add_argument("--device", default="cuda:0", help="CUDA device only, for example cuda or cuda:0")
     parser.add_argument("--conf", type=float, default=0.35, help="Detection confidence threshold.")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    selected_device = args.device
-    if selected_device == "auto":
-        try:
-            import torch
-
-            selected_device = "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:
-            selected_device = "cpu"
+    selected_device = require_cuda_device(args.device)
     run_async(args.source, args.model, selected_device, args.conf)

@@ -15,25 +15,41 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a short pose progress report.")
     parser.add_argument("--source", default="sample_video.mp4", help="Video path or webcam index.")
     parser.add_argument("--model", default="yolo11s-pose.pt", help="YOLOv8 pose model path.")
-    parser.add_argument("--device", default="cuda", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--device", default="cuda:0", help="CUDA device only, for example cuda or cuda:0")
     parser.add_argument("--frames", type=int, default=30, help="How many frames to evaluate.")
     return parser.parse_args()
 
 
-def _resolve_device(requested: str) -> str:
-    if requested != "auto":
-        return requested
+def _require_cuda_device(requested: str) -> str:
+    device = requested.strip().lower()
+    if device in {"auto", "cpu"}:
+        raise ValueError(
+            f"GPU-only mode is enabled. Unsupported device '{requested}'. "
+            "Use a CUDA device such as 'cuda' or 'cuda:0'."
+        )
+    if not device.startswith("cuda"):
+        raise ValueError(
+            f"Unsupported device '{requested}'. Only CUDA devices are allowed in GPU-only mode."
+        )
+
     try:
         import torch
+    except Exception as exc:
+        raise RuntimeError(
+            "PyTorch with CUDA support is required, but torch could not be imported."
+        ) from exc
 
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        return "cpu"
+    if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
+        raise RuntimeError(
+            "GPU-only mode is enabled, but no CUDA-capable GPU is available to PyTorch."
+        )
+
+    return "cuda:0" if device == "cuda" else device
 
 
 def main() -> int:
     args = parse_args()
-    device = _resolve_device(args.device)
+    device = _require_cuda_device(args.device)
 
     from ultralytics import YOLO
 
