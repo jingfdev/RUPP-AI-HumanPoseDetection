@@ -12,6 +12,47 @@ import cv2
 import numpy as np
 
 
+def draw_normal_labels(frame: np.ndarray, result) -> np.ndarray:
+    """Draw one Normal label and bounding box for every detected person."""
+    if result.boxes is None:
+        return frame
+
+    boxes = result.boxes.xyxy.cpu().numpy()
+    for box in boxes:
+        x1, y1, x2, y2 = [int(v) for v in box]
+        box_color = (0, 255, 0)
+        label_bg = (255, 0, 255)
+        label_text = "Normal"
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 4)
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.8
+        thickness = 2
+        pad_x = 10
+        pad_y = 8
+        (text_w, text_h), baseline = cv2.getTextSize(label_text, font, scale, thickness)
+
+        label_x1 = max(0, x1)
+        label_y2 = max(text_h + baseline + pad_y * 2, y1)
+        label_x2 = min(frame.shape[1] - 1, label_x1 + text_w + pad_x * 2)
+        label_y1 = max(0, label_y2 - text_h - baseline - pad_y * 2)
+
+        cv2.rectangle(frame, (label_x1, label_y1), (label_x2, label_y2), label_bg, -1)
+        cv2.putText(
+            frame,
+            label_text,
+            (label_x1 + pad_x, label_y2 - baseline - pad_y),
+            font,
+            scale,
+            (255, 255, 255),
+            thickness,
+            cv2.LINE_AA,
+        )
+
+    return frame
+
+
 def require_cuda_device(requested: str) -> str:
     device = requested.strip().lower()
     if device in {"auto", "cpu"}:
@@ -94,6 +135,7 @@ def run_async(source: str, model_path: str, device: str, conf: float) -> None:
                     kpt_line=True,
                     kpt_radius=4,
                 )
+                annotated_frame = draw_normal_labels(annotated_frame, results[0])
 
             if result_queue.full():
                 try:
