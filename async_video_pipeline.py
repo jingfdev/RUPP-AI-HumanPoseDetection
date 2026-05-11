@@ -6,25 +6,163 @@ import os
 import queue
 import threading
 import time
-from typing import Tuple
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Tuple
 
 import cv2
 import numpy as np
 
 
-def draw_normal_labels(frame: np.ndarray, result) -> np.ndarray:
-    """Draw one Normal label and bounding box for every detected person."""
-    if result.boxes is None:
+# COCO keypoint indices used by YOLO pose models.
+NOSE = 0
+LEFT_EYE = 1
+RIGHT_EYE = 2
+LEFT_EAR = 3
+RIGHT_EAR = 4
+LEFT_SHOULDER = 5
+RIGHT_SHOULDER = 6
+LEFT_ELBOW = 7
+RIGHT_ELBOW = 8
+LEFT_WRIST = 9
+RIGHT_WRIST = 10
+LEFT_HIP = 11
+RIGHT_HIP = 12
+
+
+@dataclass
+class PoseLabel:
+    label: str
+    score: float
+    box: Tuple[int, int, int, int]
+    color: Tuple[int, int, int]
+    reason: str
+
+
+class SleepPoseClassifier:
+    """Rule-based Normal/Sleeping classifier built from YOLO pose keypoints."""
+
+    def __init__(self, sleep_threshold: float, persist_seconds: float) -> None:
+        self.sleep_threshold = sleep_threshold
+        self.persist_seconds = persist_seconds
+        self._track_sleep_started_at: Dict[int, float] = {}
+        self._track_labels: Dict[int, str] = {}
+
+    def classify(self, result, now: float) -> List[PoseLabel]:
+        if result.boxes is None or result.keypoints is None:
+            return []
+
+        boxes = result.boxes.xyxy.cpu().numpy()
+        keypoints = result.keypoints.xy.cpu().numpy()
+        confidences = self._keypoint_confidences(result)
+        labels: List[PoseLabel] = []
+
+        for person_index, box in enumerate(boxes):
+            if person_index >= len(keypoints):
+                continue
+
+            score, reason = self._sleep_score(keypoints[person_index], confidences[person_index], box)
+            track_id = self._track_id(box, person_index)
+
+            previous_label = self._track_labels.get(track_id, "Normal")
+            if score >= self.sleep_threshold:
+                self._track_sleep_started_at.setdefault(track_id, now)
+                sleeping_long_enough = now - self._track_sleep_started_at[track_id] >= self.persist_seconds
+                label = "Sleeping" if sleeping_long_enough or previous_label == "Sleeping" else "Normal"
+            else:
+                self._track_sleep_started_at.pop(track_id, None)
+                label = "Normal"
+
+            self._track_labels[track_id] = label
+            color = (0, 0, 255) if label == "Sleeping" else (0, 255, 0)
+            x1, y1, x2, y2 = [int(v) for v in box]
+            labels.append(PoseLabel(label, score, (x1, y1, x2, y2), color, reason))
+
+        return labels
+
+    def _keypoint_confidences(self, result) -> np.ndarray:
+        if result.keypoints.conf is not None:
+            return result.keypoints.conf.cpu().numpy()
+        keypoints = result.keypoints.xy.cpu().numpy()
+        return np.ones((keypoints.shape[0], keypoints.shape[1]), dtype=np.float32)
+
+    def _track_id(self, box: np.ndarray, fallback: int) -> int:
+        x1, _, x2, _ = box
+        center_x = int((x1 + x2) / 2.0)
+        return int(center_x / 80) if center_x >= 0 else fallback
+
+    def _sleep_score(self, kp: np.ndarray, conf: np.ndarray, box: np.ndarray) -> Tuple[float, str]:
+        x1, y1, x2, y2 = box
+        box_w = max(1.0, x2 - x1)
+        box_h = max(1.0, y2 - y1)
+
+        head = self._mean_point(kp, conf, [NOSE, LEFT_EYE, RIGHT_EYE, LEFT_EAR, RIGHT_EAR])
+        shoulders = self._mean_point(kp, conf, [LEFT_SHOULDER, RIGHT_SHOULDER])
+        hips = self._mean_point(kp, conf, [LEFT_HIP, RIGHT_HIP])
+        wrists = self._mean_point(kp, conf, [LEFT_WRIST, RIGHT_WRIST])
+        elbows = self._mean_point(kp, conf, [LEFT_ELBOW, RIGHT_ELBOW])
+
+        score = 0.0
+        reasons: List[str] = []
+
+        if head is not None and shoulders is not None:
+            head_low_ratio = (head[1] - shoulders[1]) / box_h
+            if head_low_ratio > -0.06:
+                score += 0.25
+                reasons.append("head low")
+
+        if shoulders is not None and hips is not None:
+            torso_vec = hips - shoulders
+            torso_angle = abs(float(np.degrees(np.arctan2(torso_vec[1], torso_vec[0]))))
+            torso_vertical_span = abs(float(hips[1] - shoulders[1])) / box_h
+
+            if torso_angle < 35.0 or torso_angle > 145.0:
+                score += 0.30
+                reasons.append("horizontal torso")
+            if torso_vertical_span < 0.30:
+                score += 0.15
+                reasons.append("folded body")
+
+        if head is not None and wrists is not None:
+            head_to_wrists = float(np.linalg.norm(head - wrists)) / max(box_w, box_h)
+            if head_to_wrists < 0.36:
+                score += 0.18
+                reasons.append("head near hands")
+
+        if head is not None and elbows is not None:
+            head_to_elbows = float(np.linalg.norm(head - elbows)) / max(box_w, box_h)
+            if head_to_elbows < 0.34:
+                score += 0.12
+                reasons.append("head near arms")
+
+        if box_w / box_h > 0.85:
+            score += 0.15
+            reasons.append("wide posture")
+
+        return min(score, 1.0), ", ".join(reasons) or "upright posture"
+
+    def _mean_point(self, kp: np.ndarray, conf: np.ndarray, indices: Iterable[int]) -> np.ndarray | None:
+        points = []
+        for index in indices:
+            if index < len(kp) and conf[index] >= 0.25 and kp[index][0] > 0 and kp[index][1] > 0:
+                points.append(kp[index])
+        if not points:
+            return None
+        return np.mean(np.asarray(points, dtype=np.float32), axis=0)
+
+
+def draw_pose_labels(frame: np.ndarray, labels: List[PoseLabel], show_score: bool) -> np.ndarray:
+    """Draw one label and bounding box for every classified person."""
+    if not labels:
         return frame
 
-    boxes = result.boxes.xyxy.cpu().numpy()
-    for box in boxes:
-        x1, y1, x2, y2 = [int(v) for v in box]
-        box_color = (0, 255, 0)
+    for pose_label in labels:
+        x1, y1, x2, y2 = pose_label.box
         label_bg = (255, 0, 255)
-        label_text = "Normal"
+        label_text = pose_label.label
+        if show_score:
+            label_text = f"{pose_label.label} {pose_label.score:.2f}"
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 4)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), pose_label.color, 4)
 
         font = cv2.FONT_HERSHEY_SIMPLEX
         scale = 0.8
@@ -80,7 +218,15 @@ def require_cuda_device(requested: str) -> str:
     return "cuda:0" if device == "cuda" else device
 
 
-def run_async(source: str, model_path: str, device: str, conf: float) -> None:
+def run_async(
+    source: str,
+    model_path: str,
+    device: str,
+    conf: float,
+    sleep_threshold: float,
+    sleep_persist: float,
+    show_score: bool,
+) -> None:
     from ultralytics import YOLO
 
     print(
@@ -92,6 +238,10 @@ def run_async(source: str, model_path: str, device: str, conf: float) -> None:
         raise RuntimeError("Failed to open video source.")
 
     model = YOLO(model_path)
+    pose_classifier = SleepPoseClassifier(
+        sleep_threshold=sleep_threshold,
+        persist_seconds=sleep_persist,
+    )
     frame_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=1)
     result_queue: queue.Queue[Tuple[np.ndarray, float]] = queue.Queue(maxsize=1)
     stop_event = threading.Event()
@@ -135,7 +285,8 @@ def run_async(source: str, model_path: str, device: str, conf: float) -> None:
                     kpt_line=True,
                     kpt_radius=4,
                 )
-                annotated_frame = draw_normal_labels(annotated_frame, results[0])
+                pose_labels = pose_classifier.classify(results[0], time.time())
+                annotated_frame = draw_pose_labels(annotated_frame, pose_labels, show_score)
 
             if result_queue.full():
                 try:
@@ -192,10 +343,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="yolo11s-pose.pt")
     parser.add_argument("--device", default="cuda:0", help="CUDA device only, for example cuda or cuda:0")
     parser.add_argument("--conf", type=float, default=0.35, help="Detection confidence threshold.")
+    parser.add_argument(
+        "--sleep-threshold",
+        type=float,
+        default=0.55,
+        help="Pose score threshold for considering a person sleeping.",
+    )
+    parser.add_argument(
+        "--sleep-persist",
+        type=float,
+        default=1.0,
+        help="Seconds the sleeping posture must persist before labeling Sleeping.",
+    )
+    parser.add_argument(
+        "--show-score",
+        action="store_true",
+        help="Show the rule-based sleeping score next to each label.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     selected_device = require_cuda_device(args.device)
-    run_async(args.source, args.model, selected_device, args.conf)
+    run_async(
+        args.source,
+        args.model,
+        selected_device,
+        args.conf,
+        args.sleep_threshold,
+        args.sleep_persist,
+        args.show_score,
+    )
