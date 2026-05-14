@@ -16,7 +16,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
-from async_video_pipeline import require_cuda_device
+from async_video_pipeline import SleepPoseClassifier, draw_pose_labels, require_cuda_device
 
 
 MODEL_METRICS: Dict[str, Dict[str, float | str]] = {
@@ -169,31 +169,94 @@ def draw_comparison_overlay(frame: np.ndarray, family: str, scale: str, inferenc
         f"{name}",
         f"{inference_ms:.1f} ms | {1000.0 / max(1e-6, inference_ms):.1f} FPS",
         f"mAP50-95 {metrics['map50_95']} | Params {metrics['params_m']}M",
-        "1=n  2=s  3=m  4=l  5=x  |  q/ESC=quit",
+        "1=n 2=s 3=m 4=l 5=x | q=quit",
     ]
 
-    y = 30
+    y = 22
     for line in lines:
         cv2.putText(
             frame,
             line,
-            (10, y),
+            (8, y),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.72,
+            0.46,
             (0, 255, 255),
-            2,
+            1,
             cv2.LINE_AA,
         )
+        y += 20
+
+
+def fit_panel(panel: np.ndarray, cell_width: int, cell_height: int) -> np.ndarray:
+    cell = np.zeros((cell_height, cell_width, 3), dtype=np.uint8)
+    height, width = panel.shape[:2]
+    scale = min(cell_width / max(1, width), cell_height / max(1, height))
+    resized_width = max(1, int(width * scale))
+    resized_height = max(1, int(height * scale))
+    resized = cv2.resize(panel, (resized_width, resized_height))
+    x1 = (cell_width - resized_width) // 2
+    y1 = (cell_height - resized_height) // 2
+    cell[y1:y1 + resized_height, x1:x1 + resized_width] = resized
+    return cell
+
+
+def make_info_panel(width: int, height: int, scale: str) -> np.ndarray:
+    panel = np.zeros((height, width, 3), dtype=np.uint8)
+    lines = [
+        "YOLO Pose Version Comparison",
+        "",
+        "Panels:",
+        "YOLOv8   YOLO11",
+        "YOLO26  Controls",
+        "",
+        "Keys:",
+        "1 = nano",
+        "2 = small",
+        "3 = medium",
+        "4 = large",
+        "5 = extra-large",
+        "",
+        f"Current size: {scale}",
+        "q / ESC = quit",
+    ]
+    y = 40
+    for line in lines:
+        cv2.putText(panel, line, (24, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+        y += 34
+    return panel
+
+
+def make_live_dashboard(panels: List[np.ndarray], canvas_width: int, canvas_height: int, scale: str) -> np.ndarray:
+    canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
+    cell_width = canvas_width // 2
+    cell_height = canvas_height // 2
+    cells = [fit_panel(panel, cell_width, cell_height) for panel in panels]
+    cells.append(make_info_panel(cell_width, cell_height, scale))
+
+    positions = [(0, 0), (cell_width, 0), (0, cell_height), (cell_width, cell_height)]
+    for cell, (x, y) in zip(cells, positions):
+        canvas[y:y + cell_height, x:x + cell_width] = cell
+        cv2.rectangle(canvas, (x, y), (x + cell_width - 1, y + cell_height - 1), (70, 70, 70), 1)
+
+    return canvas
+
+
+def draw_live_compare_labels(frame: np.ndarray, result, classifier: SleepPoseClassifier, now: float) -> np.ndarray:
+    labels = classifier.classify(result, now, frame.shape)
+    return draw_pose_labels(frame, labels, show_score=True, show_reason=False)
+
+
+def draw_panel_title(frame: np.ndarray, family: str, scale: str, inference_ms: float) -> None:
+    name = comparison_model_name(family, scale)
+    metrics = MODEL_METRICS[name]
+    lines = [
+        f"{name} | {inference_ms:.1f} ms | {1000.0 / max(1e-6, inference_ms):.1f} FPS",
+        f"mAP50-95 {metrics['map50_95']} | Params {metrics['params_m']}M | FLOPs {metrics['flops_b']}B",
+    ]
+    y = 30
+    for line in lines:
+        cv2.putText(frame, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
         y += 28
-
-
-def make_live_dashboard(panels: List[np.ndarray], target_height: int = 520) -> np.ndarray:
-    resized = []
-    for panel in panels:
-        height, width = panel.shape[:2]
-        scale = target_height / max(1, height)
-        resized.append(cv2.resize(panel, (int(width * scale), target_height)))
-    return np.hstack(resized)
 
 
 def run_live_compare(args: argparse.Namespace, device: str) -> int:
@@ -203,6 +266,15 @@ def run_live_compare(args: argparse.Namespace, device: str) -> int:
 
     current_scale = args.scale
     models = load_comparison_models(current_scale, device)
+    classifiers = {
+        family: SleepPoseClassifier(
+            sleep_threshold=0.55,
+            persist_seconds=0.0,
+            min_box_area_ratio=0.02,
+            min_keypoints=5,
+        )
+        for family in FAMILY_TEMPLATES
+    }
     window_name = "YOLO Pose Version Comparison"
     window_ready = False
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -215,17 +287,19 @@ def run_live_compare(args: argparse.Namespace, device: str) -> int:
             break
 
         panels: List[np.ndarray] = []
+        now = time.time()
         for family, model in models.items():
             start = time.perf_counter()
             result = model.predict(frame.copy(), device=device, conf=args.conf, imgsz=args.imgsz, verbose=False)[0]
             cuda_synchronize()
             inference_ms = (time.perf_counter() - start) * 1000.0
 
-            preview = result.plot(boxes=True, labels=False, kpt_line=True, kpt_radius=4)
-            draw_comparison_overlay(preview, family, current_scale, inference_ms)
+            preview = result.plot(boxes=False, labels=False, kpt_line=True, kpt_radius=4)
+            preview = draw_live_compare_labels(preview, result, classifiers[family], now)
+            draw_panel_title(preview, family, current_scale, inference_ms)
             panels.append(preview)
 
-        dashboard = make_live_dashboard(panels)
+        dashboard = make_live_dashboard(panels, args.window_width, args.window_height, current_scale)
         if not window_ready:
             cv2.resizeWindow(
                 window_name,
@@ -246,6 +320,15 @@ def run_live_compare(args: argparse.Namespace, device: str) -> int:
                 if next_scale != current_scale:
                     print(f"[INFO] Switching comparison scale: {current_scale} -> {next_scale}")
                     models = load_comparison_models(next_scale, device)
+                    classifiers = {
+                        family: SleepPoseClassifier(
+                            sleep_threshold=0.55,
+                            persist_seconds=0.0,
+                            min_box_area_ratio=0.02,
+                            min_keypoints=5,
+                        )
+                        for family in FAMILY_TEMPLATES
+                    }
                     current_scale = next_scale
 
     cap.release()

@@ -3,6 +3,7 @@ requirements_python.txt
 node_modules/
 run_comparison.bat
 setup.bat
+*/docs/
 *.md
 *.png
 *.txt
