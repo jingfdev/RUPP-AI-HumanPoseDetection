@@ -44,6 +44,25 @@ SOURCE_URLS = {
     "YOLO12": "https://docs.ultralytics.com/models/yolo12/",
 }
 
+FAMILY_TEMPLATES = {
+    "YOLOv8": "yolov8{scale}-pose.pt",
+    "YOLO11": "yolo11{scale}-pose.pt",
+    "YOLO26": "yolo26{scale}-pose.pt",
+}
+
+SCALE_KEYS = {
+    "1": "n",
+    "2": "s",
+    "3": "m",
+    "4": "l",
+    "5": "x",
+    "n": "n",
+    "s": "s",
+    "m": "m",
+    "l": "l",
+    "x": "x",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark official Ultralytics pose models on CUDA.")
@@ -57,9 +76,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="benchmark_results", help="Directory for CSV, plots, and report.")
     parser.add_argument(
         "--benchmark-mode",
-        choices=["sampled-video", "realtime"],
+        choices=["sampled-video", "realtime", "live-compare"],
         default="sampled-video",
-        help="sampled-video reuses the same frames for every model; realtime reads frames live for each model.",
+        help="sampled-video reuses frames; realtime benchmarks live input; live-compare opens 3 visual comparison windows.",
     )
     parser.add_argument(
         "--show-window",
@@ -69,8 +88,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--window-scale",
         type=float,
-        default=1.25,
-        help="Scale factor for the realtime benchmark preview window.",
+        default=1.0,
+        help="Scale factor for preview windows when explicit width/height are not used.",
+    )
+    parser.add_argument("--window-width", type=int, default=1080, help="Popup window width for preview modes.")
+    parser.add_argument("--window-height", type=int, default=1080, help="Popup window height for preview modes.")
+    parser.add_argument(
+        "--scale",
+        default="s",
+        choices=["n", "s", "m", "l", "x"],
+        help="Initial model size for live-compare mode.",
     )
     return parser.parse_args()
 
@@ -104,6 +131,126 @@ def cuda_synchronize() -> None:
             torch.cuda.synchronize()
     except Exception:
         pass
+
+
+def release_cuda_memory() -> None:
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def comparison_model_name(family: str, scale: str) -> str:
+    return FAMILY_TEMPLATES[family].format(scale=scale)
+
+
+def load_comparison_models(scale: str, device: str) -> Dict[str, object]:
+    from ultralytics import YOLO
+
+    release_cuda_memory()
+    models: Dict[str, object] = {}
+    for family in FAMILY_TEMPLATES:
+        name = comparison_model_name(family, scale)
+        print(f"[INFO] Loading {name} on {device}...")
+        models[family] = YOLO(name)
+    return models
+
+
+def draw_comparison_overlay(frame: np.ndarray, family: str, scale: str, inference_ms: float) -> None:
+    name = comparison_model_name(family, scale)
+    metrics = MODEL_METRICS[name]
+    lines = [
+        f"{name}",
+        f"{inference_ms:.1f} ms | {1000.0 / max(1e-6, inference_ms):.1f} FPS",
+        f"mAP50-95 {metrics['map50_95']} | Params {metrics['params_m']}M",
+        "1=n  2=s  3=m  4=l  5=x  |  q/ESC=quit",
+    ]
+
+    y = 30
+    for line in lines:
+        cv2.putText(
+            frame,
+            line,
+            (10, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.72,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        y += 28
+
+
+def make_live_dashboard(panels: List[np.ndarray], target_height: int = 520) -> np.ndarray:
+    resized = []
+    for panel in panels:
+        height, width = panel.shape[:2]
+        scale = target_height / max(1, height)
+        resized.append(cv2.resize(panel, (int(width * scale), target_height)))
+    return np.hstack(resized)
+
+
+def run_live_compare(args: argparse.Namespace, device: str) -> int:
+    cap = cv2.VideoCapture(0 if args.source.isdigit() else args.source)
+    if not cap.isOpened():
+        raise RuntimeError(f"Failed to open live comparison source: {args.source}")
+
+    current_scale = args.scale
+    models = load_comparison_models(current_scale, device)
+    window_name = "YOLO Pose Version Comparison"
+    window_ready = False
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+    print("[INFO] Live compare controls: 1=n, 2=s, 3=m, 4=l, 5=x, or n/s/m/l/x. Press q or ESC to quit.")
+
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+
+        panels: List[np.ndarray] = []
+        for family, model in models.items():
+            start = time.perf_counter()
+            result = model.predict(frame.copy(), device=device, conf=args.conf, imgsz=args.imgsz, verbose=False)[0]
+            cuda_synchronize()
+            inference_ms = (time.perf_counter() - start) * 1000.0
+
+            preview = result.plot(boxes=True, labels=False, kpt_line=True, kpt_radius=4)
+            draw_comparison_overlay(preview, family, current_scale, inference_ms)
+            panels.append(preview)
+
+        dashboard = make_live_dashboard(panels)
+        if not window_ready:
+            cv2.resizeWindow(
+                window_name,
+                args.window_width,
+                args.window_height,
+            )
+            window_ready = True
+
+        cv2.imshow(window_name, dashboard)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key in {27, ord("q")}:
+            break
+        if key != 255:
+            pressed = chr(key).lower()
+            if pressed in SCALE_KEYS:
+                next_scale = SCALE_KEYS[pressed]
+                if next_scale != current_scale:
+                    print(f"[INFO] Switching comparison scale: {current_scale} -> {next_scale}")
+                    models = load_comparison_models(next_scale, device)
+                    current_scale = next_scale
+
+    cap.release()
+    cv2.destroyAllWindows()
+    return 0
 
 
 def benchmark_model(model_name: str, frames: List[np.ndarray], args: argparse.Namespace, device: str) -> Dict[str, float | str]:
@@ -209,11 +356,10 @@ def benchmark_model_realtime(model_name: str, args: argparse.Namespace, device: 
                 cv2.LINE_AA,
             )
             if not window_ready:
-                height, width = preview.shape[:2]
                 cv2.resizeWindow(
                     window_name,
-                    max(640, int(width * args.window_scale)),
-                    max(480, int(height * args.window_scale)),
+                    args.window_width,
+                    args.window_height,
                 )
                 window_ready = True
             cv2.imshow(window_name, preview)
@@ -358,6 +504,9 @@ def write_report(rows: List[Dict[str, float | str]], output_path: Path, args: ar
 def main() -> int:
     args = parse_args()
     device = require_cuda_device(args.device)
+    if args.benchmark_mode == "live-compare":
+        return run_live_compare(args, device)
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
