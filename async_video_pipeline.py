@@ -41,13 +41,21 @@ class PoseLabel:
 class SleepPoseClassifier:
     """Rule-based Normal/Sleeping classifier built from YOLO pose keypoints."""
 
-    def __init__(self, sleep_threshold: float, persist_seconds: float) -> None:
+    def __init__(
+        self,
+        sleep_threshold: float,
+        persist_seconds: float,
+        min_box_area_ratio: float,
+        min_keypoints: int,
+    ) -> None:
         self.sleep_threshold = sleep_threshold
         self.persist_seconds = persist_seconds
+        self.min_box_area_ratio = min_box_area_ratio
+        self.min_keypoints = min_keypoints
         self._track_sleep_started_at: Dict[int, float] = {}
         self._track_labels: Dict[int, str] = {}
 
-    def classify(self, result, now: float) -> List[PoseLabel]:
+    def classify(self, result, now: float, frame_shape: Tuple[int, int, int]) -> List[PoseLabel]:
         if result.boxes is None or result.keypoints is None:
             return []
 
@@ -55,8 +63,12 @@ class SleepPoseClassifier:
         keypoints = result.keypoints.xy.cpu().numpy()
         confidences = self._keypoint_confidences(result)
         labels: List[PoseLabel] = []
+        frame_area = float(frame_shape[0] * frame_shape[1])
 
-        for person_index, box in enumerate(boxes):
+        valid_indices = self._valid_person_indices(boxes, confidences, frame_area)
+
+        for person_index in valid_indices:
+            box = boxes[person_index]
             if person_index >= len(keypoints):
                 continue
 
@@ -89,6 +101,29 @@ class SleepPoseClassifier:
         x1, _, x2, _ = box
         center_x = int((x1 + x2) / 2.0)
         return int(center_x / 80) if center_x >= 0 else fallback
+
+    def _valid_person_indices(
+        self,
+        boxes: np.ndarray,
+        confidences: np.ndarray,
+        frame_area: float,
+    ) -> List[int]:
+        valid_indices: List[int] = []
+        for person_index, box in enumerate(boxes):
+            if self._box_area_ratio(box, frame_area) < self.min_box_area_ratio:
+                continue
+            if self._visible_keypoint_count(confidences[person_index]) < self.min_keypoints:
+                continue
+            valid_indices.append(person_index)
+        return valid_indices
+
+    def _box_area_ratio(self, box: np.ndarray, frame_area: float) -> float:
+        x1, y1, x2, y2 = box
+        box_area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        return box_area / max(1.0, frame_area)
+
+    def _visible_keypoint_count(self, conf: np.ndarray) -> int:
+        return int(np.count_nonzero(conf >= 0.25))
 
     def _sleep_score(self, kp: np.ndarray, conf: np.ndarray, box: np.ndarray) -> Tuple[float, str]:
         x1, y1, x2, y2 = box
@@ -150,7 +185,12 @@ class SleepPoseClassifier:
         return np.mean(np.asarray(points, dtype=np.float32), axis=0)
 
 
-def draw_pose_labels(frame: np.ndarray, labels: List[PoseLabel], show_score: bool) -> np.ndarray:
+def draw_pose_labels(
+    frame: np.ndarray,
+    labels: List[PoseLabel],
+    show_score: bool,
+    show_reason: bool,
+) -> np.ndarray:
     """Draw one label and bounding box for every classified person."""
     if not labels:
         return frame
@@ -187,6 +227,17 @@ def draw_pose_labels(frame: np.ndarray, labels: List[PoseLabel], show_score: boo
             thickness,
             cv2.LINE_AA,
         )
+        if show_reason:
+            cv2.putText(
+                frame,
+                pose_label.reason,
+                (label_x1, min(frame.shape[0] - 8, label_y2 + 22)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                pose_label.color,
+                1,
+                cv2.LINE_AA,
+            )
 
     return frame
 
@@ -225,7 +276,11 @@ def run_async(
     conf: float,
     sleep_threshold: float,
     sleep_persist: float,
+    min_box_area_ratio: float,
+    min_keypoints: int,
     show_score: bool,
+    show_reason: bool,
+    window_scale: float,
 ) -> None:
     from ultralytics import YOLO
 
@@ -241,6 +296,8 @@ def run_async(
     pose_classifier = SleepPoseClassifier(
         sleep_threshold=sleep_threshold,
         persist_seconds=sleep_persist,
+        min_box_area_ratio=min_box_area_ratio,
+        min_keypoints=min_keypoints,
     )
     frame_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=1)
     result_queue: queue.Queue[Tuple[np.ndarray, float]] = queue.Queue(maxsize=1)
@@ -285,8 +342,8 @@ def run_async(
                     kpt_line=True,
                     kpt_radius=4,
                 )
-                pose_labels = pose_classifier.classify(results[0], time.time())
-                annotated_frame = draw_pose_labels(annotated_frame, pose_labels, show_score)
+                pose_labels = pose_classifier.classify(results[0], time.time(), annotated_frame.shape)
+                annotated_frame = draw_pose_labels(annotated_frame, pose_labels, show_score, show_reason)
 
             if result_queue.full():
                 try:
@@ -300,6 +357,8 @@ def run_async(
     infer_thread = threading.Thread(target=infer_loop, daemon=True)
     capture_thread.start()
     infer_thread.start()
+    window_name = "Async YOLOv8 Pipeline"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
     fps = 0.0
     last = time.time()
@@ -324,7 +383,14 @@ def run_async(
             frame,
             f"Async {os.path.basename(model_path)} | FPS: {fps:.1f} | Inference: {inf_ms:.1f} ms",
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.imshow("Async YOLOv8 Pipeline", frame)
+        if frame_count == 1:
+            height, width = frame.shape[:2]
+            cv2.resizeWindow(
+                window_name,
+                max(640, int(width * window_scale)),
+                max(480, int(height * window_scale)),
+            )
+        cv2.imshow(window_name, frame)
         if cv2.waitKey(1) & 0xFF == 27:
             stop_event.set()
             break
@@ -356,9 +422,32 @@ def parse_args() -> argparse.Namespace:
         help="Seconds the sleeping posture must persist before labeling Sleeping.",
     )
     parser.add_argument(
+        "--min-box-area-ratio",
+        type=float,
+        default=0.02,
+        help="Ignore detections smaller than this fraction of the frame area.",
+    )
+    parser.add_argument(
+        "--min-keypoints",
+        type=int,
+        default=5,
+        help="Ignore detections with fewer visible pose keypoints.",
+    )
+    parser.add_argument(
         "--show-score",
         action="store_true",
         help="Show the rule-based sleeping score next to each label.",
+    )
+    parser.add_argument(
+        "--show-reason",
+        action="store_true",
+        help="Show which posture rules contributed to the sleeping score.",
+    )
+    parser.add_argument(
+        "--window-scale",
+        type=float,
+        default=1.25,
+        help="Scale factor for the popup display window.",
     )
     return parser.parse_args()
 
@@ -373,5 +462,9 @@ if __name__ == "__main__":
         args.conf,
         args.sleep_threshold,
         args.sleep_persist,
+        args.min_box_area_ratio,
+        args.min_keypoints,
         args.show_score,
+        args.show_reason,
+        args.window_scale,
     )
