@@ -7,4 +7,6 @@ onnx
 onnxruntime-gpu
 matplotlib
 pandas
+scikit-learn
+joblib
 jupyter

@@ -32,3 +32,7 @@ venv310/
 *.task
 # Large datasets
 datasets/
+posture_dataset/
+posture_models/
+project_assets/
+external_datasets/
