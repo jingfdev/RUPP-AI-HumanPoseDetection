@@ -243,30 +243,39 @@ def draw_pose_labels(
 
 
 def require_cuda_device(requested: str) -> str:
-    device = requested.strip().lower()
-    if device in {"auto", "cpu"}:
-        raise ValueError(
-            f"GPU-only mode is enabled. Unsupported device '{requested}'. "
-            "Use a CUDA device such as 'cuda' or 'cuda:0'."
-        )
-    if not device.startswith("cuda"):
-        raise ValueError(
-            f"Unsupported device '{requested}'. Only CUDA devices are allowed in GPU-only mode."
+    """Return a CUDA device string or fail fast; CPU fallback is not allowed."""
+    normalized = requested.strip().lower()
+    if not normalized.startswith("cuda"):
+        raise RuntimeError(
+            f"GPU-only mode is enabled, but device '{requested}' was requested. "
+            "Use --device cuda:0 or another CUDA device."
         )
 
     try:
         import torch
-    except Exception as exc:
-        raise RuntimeError(
-            "PyTorch with CUDA support is required, but torch could not be imported."
-        ) from exc
+    except ImportError as exc:
+        raise RuntimeError("PyTorch is required to verify CUDA GPU availability.") from exc
 
-    if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
+    if not torch.cuda.is_available():
         raise RuntimeError(
-            "GPU-only mode is enabled, but no CUDA-capable GPU is available to PyTorch."
+            "CUDA GPU is not available. This application is configured to run on GPU only, "
+            "so it will not fall back to CPU."
         )
 
-    return "cuda:0" if device == "cuda" else device
+    if ":" in normalized:
+        index_text = normalized.split(":", 1)[1]
+        if index_text:
+            try:
+                device_index = int(index_text)
+            except ValueError as exc:
+                raise RuntimeError(f"Invalid CUDA device '{requested}'. Expected format like cuda:0.") from exc
+            if device_index < 0 or device_index >= torch.cuda.device_count():
+                raise RuntimeError(
+                    f"CUDA device '{requested}' is not available. "
+                    f"Detected {torch.cuda.device_count()} CUDA device(s)."
+                )
+
+    return requested
 
 
 def run_async(
@@ -357,7 +366,7 @@ def run_async(
     infer_thread = threading.Thread(target=infer_loop, daemon=True)
     capture_thread.start()
     infer_thread.start()
-    window_name = "Async YOLOv8 Pipeline"
+    window_name = "YOLO Pose Normal/Sleeping Pipeline"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
     fps = 0.0
@@ -468,3 +477,4 @@ if __name__ == "__main__":
         args.show_reason,
         args.window_scale,
     )
+

@@ -1,7 +1,9 @@
-"""Benchmark YOLOv8, YOLO11, and YOLO26 pose models on the local GPU.
+"""Benchmark YOLO pose models (YOLOv8, YOLO11, YOLO26) on local GPU.
 
-The script measures local inference speed on this project's video/webcam input
-and combines it with official Ultralytics COCO pose metrics for report graphs.
+GPU-ONLY MODE: This script requires CUDA GPU and will refuse to run on CPU.
+
+Measures accuracy (mAP50-95), running time (ms), and FPS for each model generation and size.
+Generates line graphs comparing all models and a combined summary graph.
 """
 from __future__ import annotations
 
@@ -20,29 +22,107 @@ from async_video_pipeline import SleepPoseClassifier, draw_pose_labels, require_
 
 
 MODEL_METRICS: Dict[str, Dict[str, float | str]] = {
-    "yolov8n-pose.pt": {"family": "YOLOv8", "scale": "n", "map50_95": 50.4, "map50": 80.1, "official_speed_ms": 1.18, "speed_hardware": "A100 TensorRT", "params_m": 3.3, "flops_b": 9.2},
-    "yolov8s-pose.pt": {"family": "YOLOv8", "scale": "s", "map50_95": 60.0, "map50": 86.2, "official_speed_ms": 1.42, "speed_hardware": "A100 TensorRT", "params_m": 11.6, "flops_b": 30.2},
-    "yolov8m-pose.pt": {"family": "YOLOv8", "scale": "m", "map50_95": 65.0, "map50": 88.8, "official_speed_ms": 2.00, "speed_hardware": "A100 TensorRT", "params_m": 26.4, "flops_b": 81.0},
-    "yolov8l-pose.pt": {"family": "YOLOv8", "scale": "l", "map50_95": 67.6, "map50": 90.0, "official_speed_ms": 2.59, "speed_hardware": "A100 TensorRT", "params_m": 44.4, "flops_b": 168.6},
-    "yolov8x-pose.pt": {"family": "YOLOv8", "scale": "x", "map50_95": 69.2, "map50": 90.2, "official_speed_ms": 3.73, "speed_hardware": "A100 TensorRT", "params_m": 69.4, "flops_b": 263.2},
-    "yolo11n-pose.pt": {"family": "YOLO11", "scale": "n", "map50_95": 50.0, "map50": 81.0, "official_speed_ms": 1.7, "speed_hardware": "T4 TensorRT10", "params_m": 2.9, "flops_b": 7.6},
-    "yolo11s-pose.pt": {"family": "YOLO11", "scale": "s", "map50_95": 58.9, "map50": 86.3, "official_speed_ms": 2.6, "speed_hardware": "T4 TensorRT10", "params_m": 9.9, "flops_b": 23.2},
-    "yolo11m-pose.pt": {"family": "YOLO11", "scale": "m", "map50_95": 64.9, "map50": 89.4, "official_speed_ms": 4.9, "speed_hardware": "T4 TensorRT10", "params_m": 20.9, "flops_b": 71.7},
-    "yolo11l-pose.pt": {"family": "YOLO11", "scale": "l", "map50_95": 66.1, "map50": 89.9, "official_speed_ms": 6.4, "speed_hardware": "T4 TensorRT10", "params_m": 26.2, "flops_b": 90.7},
-    "yolo11x-pose.pt": {"family": "YOLO11", "scale": "x", "map50_95": 69.5, "map50": 91.1, "official_speed_ms": 12.1, "speed_hardware": "T4 TensorRT10", "params_m": 58.8, "flops_b": 203.3},
-    "yolo26n-pose.pt": {"family": "YOLO26", "scale": "n", "map50_95": 57.2, "map50": 83.3, "official_speed_ms": 1.8, "speed_hardware": "T4 TensorRT10", "params_m": 2.9, "flops_b": 7.5},
-    "yolo26s-pose.pt": {"family": "YOLO26", "scale": "s", "map50_95": 63.0, "map50": 86.6, "official_speed_ms": 2.7, "speed_hardware": "T4 TensorRT10", "params_m": 10.4, "flops_b": 23.9},
-    "yolo26m-pose.pt": {"family": "YOLO26", "scale": "m", "map50_95": 68.8, "map50": 89.6, "official_speed_ms": 5.0, "speed_hardware": "T4 TensorRT10", "params_m": 21.5, "flops_b": 73.1},
-    "yolo26l-pose.pt": {"family": "YOLO26", "scale": "l", "map50_95": 70.4, "map50": 90.5, "official_speed_ms": 6.5, "speed_hardware": "T4 TensorRT10", "params_m": 25.9, "flops_b": 91.3},
-    "yolo26x-pose.pt": {"family": "YOLO26", "scale": "x", "map50_95": 71.6, "map50": 91.6, "official_speed_ms": 12.2, "speed_hardware": "T4 TensorRT10", "params_m": 57.6, "flops_b": 201.7},
+    # YOLOv8 Pose models
+    "yolov8n-pose.pt": {"family": "YOLOv8", "scale": "n", "map50_95": 50.4, "official_speed_ms": 1.18, "speed_hardware": "A100 TensorRT"},
+    "yolov8s-pose.pt": {"family": "YOLOv8", "scale": "s", "map50_95": 60.0, "official_speed_ms": 1.42, "speed_hardware": "A100 TensorRT"},
+    "yolov8m-pose.pt": {"family": "YOLOv8", "scale": "m", "map50_95": 65.0, "official_speed_ms": 2.00, "speed_hardware": "A100 TensorRT"},
+    "yolov8l-pose.pt": {"family": "YOLOv8", "scale": "l", "map50_95": 67.6, "official_speed_ms": 2.59, "speed_hardware": "A100 TensorRT"},
+    "yolov8x-pose.pt": {"family": "YOLOv8", "scale": "x", "map50_95": 69.2, "official_speed_ms": 3.73, "speed_hardware": "A100 TensorRT"},
+    
+    # YOLO11 Pose models
+    "yolo11n-pose.pt": {"family": "YOLO11", "scale": "n", "map50_95": 50.0, "official_speed_ms": 1.7, "speed_hardware": "T4 TensorRT10"},
+    "yolo11s-pose.pt": {"family": "YOLO11", "scale": "s", "map50_95": 58.9, "official_speed_ms": 2.6, "speed_hardware": "T4 TensorRT10"},
+    "yolo11m-pose.pt": {"family": "YOLO11", "scale": "m", "map50_95": 64.9, "official_speed_ms": 4.9, "speed_hardware": "T4 TensorRT10"},
+    "yolo11l-pose.pt": {"family": "YOLO11", "scale": "l", "map50_95": 66.1, "official_speed_ms": 6.4, "speed_hardware": "T4 TensorRT10"},
+    "yolo11x-pose.pt": {"family": "YOLO11", "scale": "x", "map50_95": 69.5, "official_speed_ms": 12.1, "speed_hardware": "T4 TensorRT10"},
+    
+    # YOLO26 Pose models
+    "yolo26n-pose.pt": {"family": "YOLO26", "scale": "n", "map50_95": 57.2, "official_speed_ms": 1.8, "speed_hardware": "T4 TensorRT10"},
+    "yolo26s-pose.pt": {"family": "YOLO26", "scale": "s", "map50_95": 63.0, "official_speed_ms": 2.7, "speed_hardware": "T4 TensorRT10"},
+    "yolo26m-pose.pt": {"family": "YOLO26", "scale": "m", "map50_95": 68.8, "official_speed_ms": 5.0, "speed_hardware": "T4 TensorRT10"},
+    "yolo26l-pose.pt": {"family": "YOLO26", "scale": "l", "map50_95": 70.4, "official_speed_ms": 6.5, "speed_hardware": "T4 TensorRT10"},
+    "yolo26x-pose.pt": {"family": "YOLO26", "scale": "x", "map50_95": 71.6, "official_speed_ms": 12.2, "speed_hardware": "T4 TensorRT10"},
 }
 
 SOURCE_URLS = {
     "YOLOv8": "https://huggingface.co/Ultralytics/YOLOv8",
     "YOLO11": "https://huggingface.co/Ultralytics/YOLO11",
     "YOLO26": "https://docs.ultralytics.com/tasks/pose/",
-    "YOLO12": "https://docs.ultralytics.com/models/yolo12/",
 }
+
+HISTORICAL_GENERATION_REVIEW = [
+    {
+        "generation": "YOLOv5",
+        "main_benchmark": "No",
+        "result": "Excluded from direct benchmark",
+        "reason": "No official Ultralytics pretrained COCO 17-keypoint pose weights in the same YOLO(...)-pose workflow.",
+    },
+    {
+        "generation": "YOLOv6",
+        "main_benchmark": "No",
+        "result": "Excluded from direct benchmark",
+        "reason": "Not an official Ultralytics pretrained pose family compatible with this pipeline.",
+    },
+    {
+        "generation": "YOLOv7",
+        "main_benchmark": "No",
+        "result": "Excluded from direct benchmark",
+        "reason": "Different older ecosystem; not a direct official Ultralytics pretrained pose model family for this workflow.",
+    },
+    {
+        "generation": "YOLOv8",
+        "main_benchmark": "Yes",
+        "result": "Benchmarked",
+        "reason": "Official pretrained Ultralytics pose family with compatible COCO 17-keypoint output.",
+    },
+    {
+        "generation": "YOLOv9",
+        "main_benchmark": "No",
+        "result": "Excluded from direct benchmark",
+        "reason": "Not part of the official compatible pretrained pose model set used by this project.",
+    },
+    {
+        "generation": "YOLOv10",
+        "main_benchmark": "No",
+        "result": "Excluded from direct benchmark",
+        "reason": "Not part of the official compatible pretrained pose model set used by this project.",
+    },
+    {
+        "generation": "YOLO11",
+        "main_benchmark": "Yes",
+        "result": "Benchmarked",
+        "reason": "Current project model family with official pretrained Ultralytics pose weights.",
+    },
+    {
+        "generation": "YOLO12",
+        "main_benchmark": "No",
+        "result": "Excluded from direct benchmark",
+        "reason": "Pose architecture exists, but official pretrained YOLO12-pose weights are not available for fair direct comparison.",
+    },
+    {
+        "generation": "YOLO26",
+        "main_benchmark": "Yes",
+        "result": "Benchmarked",
+        "reason": "Newer official Ultralytics pretrained pose family with compatible COCO 17-keypoint output.",
+    },
+]
+
+RESULT_FIELDS = ["model", "family", "scale", "status", "accuracy_map50_95", "running_time_ms", "fps"]
+HISTORICAL_REVIEW_FIELDS = ["generation", "main_benchmark", "result", "reason"]
+OBSOLETE_OUTPUTS = [
+    "accuracy_speed_tradeoff.png",
+    "flops_b.png",
+    "flops_b_line.png",
+    "local_fps.png",
+    "local_fps_line.png",
+    "local_mean_ms.png",
+    "local_mean_ms_line.png",
+    "official_pose_map.png",
+    "official_pose_map_line.png",
+    "params_m.png",
+    "params_m_line.png",
+    "comparison_summary_graph.png",
+]
 
 FAMILY_TEMPLATES = {
     "YOLOv8": "yolov8{scale}-pose.pt",
@@ -63,11 +143,19 @@ SCALE_KEYS = {
     "x": "x",
 }
 
+# Model families for comparison and their color palette
+MODEL_FAMILIES = ["YOLOv8", "YOLO11", "YOLO26"]
+FAMILY_COLORS = {
+    "YOLOv8": "#d62728",  # red
+    "YOLO11": "#9467bd",  # purple
+    "YOLO26": "#8c564b",  # brown
+}
+
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark official Ultralytics pose models on CUDA.")
+    parser = argparse.ArgumentParser(description="Benchmark official Ultralytics pose models on CUDA (GPU ONLY - CPU not supported).")
     parser.add_argument("--source", default="sample_video.mp4", help="Video file used for local speed benchmarking.")
-    parser.add_argument("--device", default="cuda:0", help="CUDA device only, for example cuda or cuda:0.")
+    parser.add_argument("--device", default="cuda:0", help="CUDA GPU device (e.g., cuda or cuda:0). CPU is NOT supported.")
     parser.add_argument("--conf", type=float, default=0.35, help="Inference confidence threshold.")
     parser.add_argument("--imgsz", type=int, default=640, help="Inference image size.")
     parser.add_argument("--frames", type=int, default=90, help="Maximum sampled frames per model.")
@@ -75,10 +163,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=5, help="Warmup predictions before timing each model.")
     parser.add_argument("--output-dir", default="benchmark_results", help="Directory for CSV, plots, and report.")
     parser.add_argument(
+        "--from-csv",
+        default="",
+        help="Regenerate plots/report from an existing pose_model_comparison.csv without rerunning models.",
+    )
+    parser.add_argument(
         "--benchmark-mode",
         choices=["sampled-video", "realtime", "live-compare"],
         default="sampled-video",
-        help="sampled-video reuses frames; realtime benchmarks live input; live-compare opens 3 visual comparison windows.",
+        help="sampled-video reuses frames; realtime benchmarks live input; live-compare opens one dashboard window with three model panels.",
     )
     parser.add_argument(
         "--show-window",
@@ -133,6 +226,18 @@ def cuda_synchronize() -> None:
         pass
 
 
+def validate_gpu_device(device: str) -> None:
+    """Ensure GPU-only execution. Refuse CPU fallback."""
+    if not device.lower().startswith("cuda"):
+        raise RuntimeError(f"GPU-ONLY mode: device '{device}' is not CUDA. CPU execution is not supported.")
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError("GPU-ONLY mode: CUDA not available on this system. Cannot proceed without GPU.")
+    except ImportError:
+        raise RuntimeError("PyTorch not available. Cannot check GPU availability.")
+
+
 def release_cuda_memory() -> None:
     import gc
 
@@ -155,7 +260,8 @@ def load_comparison_models(scale: str, device: str) -> Dict[str, object]:
 
     release_cuda_memory()
     models: Dict[str, object] = {}
-    for family in FAMILY_TEMPLATES:
+    # Only load YOLOv8, YOLO11, YOLO26 for live comparison (fits in 2x2 grid)
+    for family in ["YOLOv8", "YOLO11", "YOLO26"]:
         name = comparison_model_name(family, scale)
         print(f"[INFO] Loading {name} on {device}...")
         models[family] = YOLO(name)
@@ -168,7 +274,7 @@ def draw_comparison_overlay(frame: np.ndarray, family: str, scale: str, inferenc
     lines = [
         f"{name}",
         f"{inference_ms:.1f} ms | {1000.0 / max(1e-6, inference_ms):.1f} FPS",
-        f"mAP50-95 {metrics['map50_95']} | Params {metrics['params_m']}M",
+        f"mAP50-95 {metrics['map50_95']}",
         "1=n 2=s 3=m 4=l 5=x | q=quit",
     ]
 
@@ -251,7 +357,7 @@ def draw_panel_title(frame: np.ndarray, family: str, scale: str, inference_ms: f
     metrics = MODEL_METRICS[name]
     lines = [
         f"{name} | {inference_ms:.1f} ms | {1000.0 / max(1e-6, inference_ms):.1f} FPS",
-        f"mAP50-95 {metrics['map50_95']} | Params {metrics['params_m']}M | FLOPs {metrics['flops_b']}B",
+        f"mAP50-95 {metrics['map50_95']}",
     ]
     y = 30
     for line in lines:
@@ -273,7 +379,7 @@ def run_live_compare(args: argparse.Namespace, device: str) -> int:
             min_box_area_ratio=0.02,
             min_keypoints=5,
         )
-        for family in FAMILY_TEMPLATES
+        for family in ["YOLOv8", "YOLO11", "YOLO26"]
     }
     window_name = "YOLO Pose Version Comparison"
     window_ready = False
@@ -327,7 +433,7 @@ def run_live_compare(args: argparse.Namespace, device: str) -> int:
                             min_box_area_ratio=0.02,
                             min_keypoints=5,
                         )
-                        for family in FAMILY_TEMPLATES
+                        for family in ["YOLOv8", "YOLO11", "YOLO26"]
                     }
                     current_scale = next_scale
 
@@ -345,8 +451,6 @@ def benchmark_model(model_name: str, frames: List[np.ndarray], args: argparse.Na
     cuda_synchronize()
 
     timings_ms: List[float] = []
-    detections = 0
-    people_with_keypoints = 0
 
     for frame in frames:
         start = time.perf_counter()
@@ -354,11 +458,7 @@ def benchmark_model(model_name: str, frames: List[np.ndarray], args: argparse.Na
         cuda_synchronize()
         timings_ms.append((time.perf_counter() - start) * 1000.0)
 
-        detections += len(result.boxes) if result.boxes is not None else 0
-        people_with_keypoints += int(result.keypoints.xy.shape[0]) if result.keypoints is not None else 0
-
     mean_ms = statistics.mean(timings_ms)
-    median_ms = statistics.median(timings_ms)
     fps = 1000.0 / mean_ms if mean_ms > 0 else 0.0
     official = MODEL_METRICS[model_name]
 
@@ -367,20 +467,9 @@ def benchmark_model(model_name: str, frames: List[np.ndarray], args: argparse.Na
         "family": official["family"],
         "scale": official["scale"],
         "status": "ok",
-        "frames": len(frames),
-        "local_mean_ms": round(mean_ms, 3),
-        "local_median_ms": round(median_ms, 3),
-        "local_fps": round(fps, 3),
-        "end_to_end_fps": "",
-        "avg_detections_per_frame": round(detections / len(frames), 3),
-        "avg_people_keypoints_per_frame": round(people_with_keypoints / len(frames), 3),
-        "official_pose_map50_95": official["map50_95"],
-        "official_pose_map50": official["map50"],
-        "official_speed_ms": official["official_speed_ms"],
-        "official_speed_hardware": official["speed_hardware"],
-        "params_m": official["params_m"],
-        "flops_b": official["flops_b"],
-        "source_url": SOURCE_URLS[str(official["family"])],
+        "running_time_ms": round(mean_ms, 3),
+        "fps": round(fps, 3),
+        "accuracy_map50_95": official["map50_95"],
     }
 
 
@@ -404,9 +493,6 @@ def benchmark_model_realtime(model_name: str, args: argparse.Namespace, device: 
     cuda_synchronize()
 
     timings_ms: List[float] = []
-    detections = 0
-    people_with_keypoints = 0
-    wall_start = time.perf_counter()
     window_name = "Pose Benchmark Preview"
     window_ready = False
 
@@ -422,9 +508,6 @@ def benchmark_model_realtime(model_name: str, args: argparse.Namespace, device: 
         result = model.predict(frame, device=device, conf=args.conf, imgsz=args.imgsz, verbose=False)[0]
         cuda_synchronize()
         timings_ms.append((time.perf_counter() - start) * 1000.0)
-
-        detections += len(result.boxes) if result.boxes is not None else 0
-        people_with_keypoints += int(result.keypoints.xy.shape[0]) if result.keypoints is not None else 0
 
         if args.show_window:
             preview = result.plot(boxes=True, labels=False, kpt_line=True, kpt_radius=4)
@@ -449,7 +532,6 @@ def benchmark_model_realtime(model_name: str, args: argparse.Namespace, device: 
             if cv2.waitKey(1) & 0xFF == 27:
                 break
 
-    wall_elapsed = max(1e-6, time.perf_counter() - wall_start)
     cap.release()
     if args.show_window:
         cv2.destroyWindow(window_name)
@@ -458,9 +540,7 @@ def benchmark_model_realtime(model_name: str, args: argparse.Namespace, device: 
         raise RuntimeError("No realtime frames were processed.")
 
     mean_ms = statistics.mean(timings_ms)
-    median_ms = statistics.median(timings_ms)
-    inference_fps = 1000.0 / mean_ms if mean_ms > 0 else 0.0
-    end_to_end_fps = len(timings_ms) / wall_elapsed
+    fps = 1000.0 / mean_ms if mean_ms > 0 else 0.0
     official = MODEL_METRICS[model_name]
 
     return {
@@ -468,76 +548,185 @@ def benchmark_model_realtime(model_name: str, args: argparse.Namespace, device: 
         "family": official["family"],
         "scale": official["scale"],
         "status": "ok",
-        "frames": len(timings_ms),
-        "local_mean_ms": round(mean_ms, 3),
-        "local_median_ms": round(median_ms, 3),
-        "local_fps": round(inference_fps, 3),
-        "end_to_end_fps": round(end_to_end_fps, 3),
-        "avg_detections_per_frame": round(detections / len(timings_ms), 3),
-        "avg_people_keypoints_per_frame": round(people_with_keypoints / len(timings_ms), 3),
-        "official_pose_map50_95": official["map50_95"],
-        "official_pose_map50": official["map50"],
-        "official_speed_ms": official["official_speed_ms"],
-        "official_speed_hardware": official["speed_hardware"],
-        "params_m": official["params_m"],
-        "flops_b": official["flops_b"],
-        "source_url": SOURCE_URLS[str(official["family"])],
+        "running_time_ms": round(mean_ms, 3),
+        "fps": round(fps, 3),
+        "accuracy_map50_95": official["map50_95"],
     }
 
 
 def write_csv(rows: List[Dict[str, float | str]], output_path: Path) -> None:
     with output_path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(file, fieldnames=RESULT_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
 
 
-def plot_bar(rows: List[Dict[str, float | str]], key: str, title: str, ylabel: str, path: Path) -> None:
-    labels = [str(row["model"]).replace("-pose.pt", "") for row in rows]
-    values = [float(row[key]) for row in rows]
-    palette = {"YOLOv8": "#4c78a8", "YOLO11": "#59a14f", "YOLO26": "#f28e2b"}
-    colors = [palette[str(row["family"])] for row in rows]
-
-    plt.figure(figsize=(14, 6))
-    plt.bar(labels, values, color=colors)
-    plt.title(title)
-    plt.ylabel(ylabel)
-    plt.xticks(rotation=35, ha="right")
-    plt.tight_layout()
-    plt.savefig(path, dpi=160)
-    plt.close()
+def write_historical_generation_review(output_path: Path) -> None:
+    with output_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=HISTORICAL_REVIEW_FIELDS)
+        writer.writeheader()
+        writer.writerows(HISTORICAL_GENERATION_REVIEW)
 
 
-def plot_tradeoff(rows: List[Dict[str, float | str]], path: Path) -> None:
-    palette = {"YOLOv8": "#4c78a8", "YOLO11": "#59a14f", "YOLO26": "#f28e2b"}
-    plt.figure(figsize=(10, 6))
+def read_csv_rows(path: Path) -> List[Dict[str, float | str]]:
+    with path.open("r", newline="", encoding="utf-8") as file:
+        return list(csv.DictReader(file))
 
-    for family in ["YOLOv8", "YOLO11", "YOLO26"]:
-        family_rows = [row for row in rows if row["family"] == family]
-        x_values = [float(row["local_mean_ms"]) for row in family_rows]
-        y_values = [float(row["official_pose_map50_95"]) for row in family_rows]
-        scales = [str(row["scale"]) for row in family_rows]
-        plt.scatter(x_values, y_values, label=family, color=palette[family], s=90)
-        for x_value, y_value, scale in zip(x_values, y_values, scales):
-            plt.annotate(scale, (x_value, y_value), textcoords="offset points", xytext=(5, 5))
 
-    plt.title("Accuracy vs Local GPU Inference Time")
-    plt.xlabel("Local mean inference time (ms/frame)")
-    plt.ylabel("Official COCO pose mAP50-95")
-    plt.grid(True, alpha=0.25)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(path, dpi=160)
-    plt.close()
+def normalize_rows(rows: List[Dict[str, float | str]]) -> List[Dict[str, float | str]]:
+    normalized: List[Dict[str, float | str]] = []
+    for row in rows:
+        normalized.append(
+            {
+                "model": row["model"],
+                "family": row["family"],
+                "scale": row["scale"],
+                "status": row.get("status", "ok"),
+                "accuracy_map50_95": row.get("accuracy_map50_95", row.get("official_pose_map50_95", 0)),
+                "running_time_ms": row.get("running_time_ms", row.get("local_mean_ms", 0)),
+                "fps": row.get("fps", row.get("local_fps", 0)),
+            }
+        )
+    return normalized
+
+
+def cleanup_old_outputs(output_dir: Path) -> None:
+    for filename in OBSOLETE_OUTPUTS:
+        path = output_dir / filename
+        if path.exists():
+            path.unlink()
+
+
+def write_outputs(rows: List[Dict[str, float | str]], output_dir: Path, args: argparse.Namespace) -> None:
+    cleanup_old_outputs(output_dir)
+    rows = normalize_rows(rows)
+    write_csv(rows, output_dir / "pose_model_comparison.csv")
+    write_historical_generation_review(output_dir / "historical_yolo_generation_review.csv")
+    ok_rows = [row for row in rows if row["status"] == "ok"]
+
+    if ok_rows:
+        plot_line_by_scale(ok_rows, "fps", "FPS Comparison by Model Size", "FPS (higher is better)", output_dir / "fps_graph.png")
+        plot_line_by_scale(ok_rows, "running_time_ms", "Running Time Comparison by Model Size", "ms/frame (lower is better)", output_dir / "running_time_graph.png")
+        plot_line_by_scale(ok_rows, "accuracy_map50_95", "Accuracy Comparison by Model Size", "mAP50-95 (higher is better)", output_dir / "accuracy_graph.png")
+        plot_accuracy_runtime_tradeoff(ok_rows, output_dir / "accuracy_runtime_tradeoff_graph.png")
+        plot_combined_summary(ok_rows, output_dir / "combined_summary_graph.png")
+        write_report(ok_rows, output_dir / "pose_model_benchmark_report.md", args)
+
+
+def compact_model_label(row: Dict[str, float | str]) -> str:
+    family = str(row["family"]).replace("YOLOv", "").replace("YOLO", "")
+    return f"{family}{row['scale']}"
+
+
+def annotate_point(axis, x_value, y_value, label: str, color: str, index: int, value: float | None = None) -> None:
+    offsets = [(6, 8), (6, -14), (-22, 8), (-22, -14), (8, 0)]
+    offset = offsets[index % len(offsets)]
+    text = label if value is None else f"{label}\n{value:.1f}"
+    axis.annotate(
+        text,
+        (x_value, y_value),
+        textcoords="offset points",
+        xytext=offset,
+        fontsize=8,
+        color=color,
+        fontweight="bold",
+        alpha=0.9,
+    )
+
+
+def plot_line_by_scale(rows: List[Dict[str, float | str]], key: str, title: str, ylabel: str, path: Path) -> None:
+    """Plot line graphs for each metric by model size."""
+    scale_order = ["n", "s", "m", "l", "x"]
+
+    fig, axis = plt.subplots(figsize=(12, 7))
+    for family in MODEL_FAMILIES:
+        family_rows = {str(row["scale"]): row for row in rows if row["family"] == family}
+        values = [float(family_rows[scale][key]) for scale in scale_order if scale in family_rows]
+        labels = [scale for scale in scale_order if scale in family_rows]
+        if values:
+            color = FAMILY_COLORS[family]
+            axis.plot(labels, values, marker="o", markersize=6, linewidth=2.5, label=family, color=color)
+            for index, (scale, value) in enumerate(zip(labels, values)):
+                annotate_point(axis, scale, value, compact_model_label(family_rows[scale]), color, index, value)
+
+    axis.set_title(title, fontsize=14, fontweight="bold")
+    axis.set_xlabel("Model Size", fontsize=12)
+    axis.set_ylabel(ylabel, fontsize=12)
+    axis.grid(True, alpha=0.3, linestyle="--")
+    axis.legend(loc="best", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
+
+
+def plot_accuracy_runtime_tradeoff(rows: List[Dict[str, float | str]], path: Path) -> None:
+    """Plot accuracy against local running time with connected model-size lines."""
+    scale_order = ["n", "s", "m", "l", "x"]
+
+    fig, axis = plt.subplots(figsize=(13, 7.5))
+    for family in MODEL_FAMILIES:
+        family_rows = {str(row["scale"]): row for row in rows if row["family"] == family}
+        ordered_rows = [family_rows[scale] for scale in scale_order if scale in family_rows]
+        if not ordered_rows:
+            continue
+        x_values = [float(row["running_time_ms"]) for row in ordered_rows]
+        y_values = [float(row["accuracy_map50_95"]) for row in ordered_rows]
+        color = FAMILY_COLORS[family]
+        axis.plot(x_values, y_values, marker="o", markersize=7, linewidth=2.8, label=family, color=color)
+        for index, (row, x_value, y_value) in enumerate(zip(ordered_rows, x_values, y_values)):
+            annotate_point(axis, x_value, y_value, compact_model_label(row), color, index)
+
+    axis.set_title("Accuracy vs Running Time Tradeoff", fontsize=15, fontweight="bold")
+    axis.set_xlabel("Local GPU running time (ms/frame, lower is better)", fontsize=12)
+    axis.set_ylabel("Official COCO pose mAP50-95 (higher is better)", fontsize=12)
+    axis.grid(True, alpha=0.3, linestyle="--")
+    axis.legend(loc="best", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
+def plot_combined_summary(rows: List[Dict[str, float | str]], path: Path) -> None:
+    """Plot all three metrics in a single figure with subplots."""
+    scale_order = ["n", "s", "m", "l", "x"]
+    metrics = [
+        ("fps", "FPS Comparison", "FPS (higher is better)"),
+        ("running_time_ms", "Running Time Comparison", "ms/frame (lower is better)"),
+        ("accuracy_map50_95", "Accuracy Comparison", "mAP50-95 (higher is better)"),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
+    fig.suptitle("YOLO Pose Model Comparison: Accuracy, Running Time, FPS", fontsize=16, fontweight="bold")
+    
+    for axis, (key, title, ylabel) in zip(axes, metrics):
+        for family in MODEL_FAMILIES:
+            family_rows = {str(row["scale"]): row for row in rows if row["family"] == family}
+            values = [float(family_rows[scale][key]) for scale in scale_order if scale in family_rows]
+            labels = [scale for scale in scale_order if scale in family_rows]
+            if values:
+                color = FAMILY_COLORS[family]
+                axis.plot(labels, values, marker="o", markersize=4, linewidth=2.2, label=family, color=color)
+                for index, (scale, value) in enumerate(zip(labels, values)):
+                    annotate_point(axis, scale, value, compact_model_label(family_rows[scale]), color, index)
+        
+        axis.set_title(title, fontsize=12, fontweight="bold")
+        axis.set_xlabel("Model Size", fontsize=11)
+        axis.set_ylabel(ylabel, fontsize=11)
+        axis.grid(True, alpha=0.3, linestyle="--")
+        axis.legend(loc="best", fontsize=10)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
 
 
 def write_report(rows: List[Dict[str, float | str]], output_path: Path, args: argparse.Namespace) -> None:
-    best_fps = max(rows, key=lambda row: float(row["local_fps"]))
-    best_accuracy = max(rows, key=lambda row: float(row["official_pose_map50_95"]))
-    best_balance = max(rows, key=lambda row: float(row["official_pose_map50_95"]) / max(1.0, float(row["local_mean_ms"])))
+    best_fps = max(rows, key=lambda row: float(row["fps"]))
+    best_accuracy = max(rows, key=lambda row: float(row["accuracy_map50_95"]))
+    best_runtime = min(rows, key=lambda row: float(row["running_time_ms"]))
 
     lines = [
-        "# Pose Model Benchmark Report",
+        "# YOLO Pose Model Benchmark Report",
         "",
         "## Benchmark Setup",
         "",
@@ -549,49 +738,74 @@ def write_report(rows: List[Dict[str, float | str]], output_path: Path, args: ar
         f"- Confidence threshold: `{args.conf}`",
         f"- Preview window: `{args.show_window}`",
         "",
+        "## Metrics Measured",
+        "",
+        "This benchmark measures **only three key metrics** for each model:",
+        "",
+        "1. **Accuracy (mAP50-95)**: Official COCO pose accuracy from Ultralytics documentation",
+        "2. **Running Time (ms)**: Local inference time per frame measured on the project machine",
+        "3. **FPS**: Frames per second (1000 / running_time_ms)",
+        "",
         "## Important Notes",
         "",
-        "- Local speed/FPS is measured on the project machine and is the fairest speed comparison for this demo.",
-        "- `sampled-video` mode gives every model the same frames, so it is the fairest reproducible comparison.",
-        "- `realtime` mode measures live camera/video processing behavior, but the scene can change between models.",
-        "- If `--show-window` is used, local inference time remains model-only, but end-to-end FPS can include preview overhead.",
-        "- Official mAP, parameters, and FLOPs are taken from Ultralytics model documentation/model cards.",
-        "- Official YOLOv8 speed uses A100 TensorRT, while YOLO11 and YOLO26 list T4 TensorRT10, so official speed values should not be directly compared across all generations.",
-        "- YOLO12-pose is excluded because official pretrained YOLO12-pose weights are not available; training YOLO12-pose would make the comparison dependent on custom training settings.",
+        "- FPS and running time are measured on the local GPU device specified.",
+        "- `sampled-video` mode feeds every model the same frames, providing a fair and reproducible comparison.",
+        "- `realtime` mode measures live video/camera processing but scenes may differ between model runs.",
+        "- Accuracy values are official metrics from Ultralytics model cards (COCO pose mAP50-95).",
+        "- Models included: YOLOv8, YOLO11, YOLO26 across nano (n), small (s), medium (m), large (l), and extra-large (x) sizes.",
+        "- Older YOLO generations are reviewed separately in `historical_yolo_generation_review.csv`; they are not mixed into the direct benchmark because they are not equivalent official pretrained pose targets for this pipeline.",
         "",
-        "## Summary",
+        "## Summary - Best Performers",
         "",
-        f"- Fastest local model: `{best_fps['model']}` at `{best_fps['local_fps']}` FPS.",
-        f"- Highest official pose mAP50-95: `{best_accuracy['model']}` at `{best_accuracy['official_pose_map50_95']}`.",
-        f"- Best simple accuracy/speed balance in this run: `{best_balance['model']}`.",
+        f"- **Highest FPS**: `{best_fps['model']}` ({best_fps['family']} {best_fps['scale']}) at `{best_fps['fps']}` FPS",
+        f"- **Lowest Running Time**: `{best_runtime['model']}` ({best_runtime['family']} {best_runtime['scale']}) at `{best_runtime['running_time_ms']}` ms/frame",
+        f"- **Highest Accuracy**: `{best_accuracy['model']}` ({best_accuracy['family']} {best_accuracy['scale']}) at `{best_accuracy['accuracy_map50_95']}` mAP50-95",
         "",
         "## Generated Graphs",
         "",
-        "- `local_fps.png`: local GPU FPS comparison.",
-        "- `local_mean_ms.png`: local GPU inference time comparison.",
-        "- `official_pose_map.png`: official COCO pose accuracy comparison.",
-        "- `accuracy_speed_tradeoff.png`: local speed vs official accuracy.",
-        "- `params_m.png`: parameter count comparison.",
-        "- `flops_b.png`: computational cost comparison.",
+        "- `fps_graph.png`: FPS comparison across all models and sizes (line graph)",
+        "- `running_time_graph.png`: Running time comparison across all models and sizes (line graph)",
+        "- `accuracy_graph.png`: Accuracy comparison across all models and sizes (line graph)",
+        "- `accuracy_runtime_tradeoff_graph.png`: Accuracy compared with local running time using connected model-size lines",
+        "- `combined_summary_graph.png`: All three metrics in a single figure with three subplots (line graphs)",
+        "- `historical_yolo_generation_review.csv`: Review result for other YOLO generations considered but not directly benchmarked",
         "",
-        "## References",
+        "## Historical YOLO Generations Reviewed",
         "",
-        f"- YOLOv8 model card: {SOURCE_URLS['YOLOv8']}",
-        f"- YOLO11 model card: {SOURCE_URLS['YOLO11']}",
-        f"- YOLO26 pose documentation: {SOURCE_URLS['YOLO26']}",
-        f"- YOLO12 documentation: {SOURCE_URLS['YOLO12']}",
+        "| Generation | Main Benchmark | Review Result | Reason |",
+        "| --- | --- | --- | --- |",
+        *[
+            f"| {row['generation']} | {row['main_benchmark']} | {row['result']} | {row['reason']} |"
+            for row in HISTORICAL_GENERATION_REVIEW
+        ],
+        "",
+        "## Model References",
+        "",
+        f"- YOLOv8: {SOURCE_URLS['YOLOv8']}",
+        f"- YOLO11: {SOURCE_URLS['YOLO11']}",
+        f"- YOLO26: {SOURCE_URLS['YOLO26']}",
     ]
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> int:
     args = parse_args()
-    device = require_cuda_device(args.device)
-    if args.benchmark_mode == "live-compare":
-        return run_live_compare(args, device)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.from_csv:
+        rows = read_csv_rows(Path(args.from_csv))
+        write_outputs(rows, output_dir, args)
+        print(f"[INFO] Graphs/report regenerated from CSV into: {output_dir.resolve()}")
+        return 0
+
+    # GPU-ONLY enforcement for all modes that run model inference.
+    validate_gpu_device(args.device)
+
+    device = require_cuda_device(args.device)
+    if args.benchmark_mode == "live-compare":
+        return run_live_compare(args, device)
 
     frames = None
     if args.benchmark_mode == "sampled-video":
@@ -608,42 +822,20 @@ def main() -> int:
                 rows.append(benchmark_model_realtime(model_name, args, device))
         except Exception as exc:
             official = MODEL_METRICS[model_name]
-            frame_count = len(frames) if frames is not None else args.frames
             rows.append(
                 {
                     "model": model_name,
                     "family": official["family"],
                     "scale": official["scale"],
                     "status": f"failed: {exc}",
-                    "frames": frame_count,
-                    "local_mean_ms": 0,
-                    "local_median_ms": 0,
-                    "local_fps": 0,
-                    "end_to_end_fps": 0,
-                    "avg_detections_per_frame": 0,
-                    "avg_people_keypoints_per_frame": 0,
-                    "official_pose_map50_95": official["map50_95"],
-                    "official_pose_map50": official["map50"],
-                    "official_speed_ms": official["official_speed_ms"],
-                    "official_speed_hardware": official["speed_hardware"],
-                    "params_m": official["params_m"],
-                    "flops_b": official["flops_b"],
-                    "source_url": SOURCE_URLS[str(official["family"])],
+                    "running_time_ms": 0,
+                    "fps": 0,
+                    "accuracy_map50_95": official["map50_95"],
                 }
             )
             print(f"[WARN] {model_name} failed: {exc}")
 
-    write_csv(rows, output_dir / "pose_model_comparison.csv")
-    ok_rows = [row for row in rows if row["status"] == "ok"]
-
-    if ok_rows:
-        plot_bar(ok_rows, "local_fps", "Local GPU FPS by Pose Model", "FPS", output_dir / "local_fps.png")
-        plot_bar(ok_rows, "local_mean_ms", "Local GPU Inference Time by Pose Model", "ms/frame", output_dir / "local_mean_ms.png")
-        plot_bar(ok_rows, "official_pose_map50_95", "Official COCO Pose Accuracy", "mAP50-95", output_dir / "official_pose_map.png")
-        plot_bar(ok_rows, "params_m", "Model Parameter Count", "Parameters (M)", output_dir / "params_m.png")
-        plot_bar(ok_rows, "flops_b", "Model FLOPs", "FLOPs (B)", output_dir / "flops_b.png")
-        plot_tradeoff(ok_rows, output_dir / "accuracy_speed_tradeoff.png")
-        write_report(ok_rows, output_dir / "pose_model_benchmark_report.md", args)
+    write_outputs(rows, output_dir, args)
 
     print(f"[INFO] Results written to: {output_dir.resolve()}")
     return 0
