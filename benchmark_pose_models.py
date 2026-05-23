@@ -18,7 +18,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
-from async_video_pipeline import SleepPoseClassifier, draw_pose_labels, require_cuda_device
+from async_video_pipeline import SleepPoseClassifier, TrainedPostureClassifier, draw_pose_labels, require_cuda_device
 
 
 MODEL_METRICS: Dict[str, Dict[str, float | str]] = {
@@ -191,6 +191,17 @@ def parse_args() -> argparse.Namespace:
         default="s",
         choices=["n", "s", "m", "l", "x"],
         help="Initial model size for live-compare mode.",
+    )
+    parser.add_argument(
+        "--classifier-mode",
+        choices=["trained", "rule"],
+        default="trained",
+        help="Posture labeler used in live-compare mode.",
+    )
+    parser.add_argument(
+        "--posture-classifier",
+        default="posture_models/yolo11s_balanced_drop_confusing/best_posture_classifier.joblib",
+        help="Path to the trained Normal/Sleeping classifier used by live-compare mode.",
     )
     return parser.parse_args()
 
@@ -365,6 +376,29 @@ def draw_panel_title(frame: np.ndarray, family: str, scale: str, inference_ms: f
         y += 28
 
 
+def make_posture_classifier(args: argparse.Namespace) -> SleepPoseClassifier:
+    if args.classifier_mode == "trained":
+        classifier_path = Path(args.posture_classifier)
+        if not classifier_path.exists():
+            raise RuntimeError(
+                f"Trained posture classifier not found: {classifier_path}. "
+                "Run training first or use --classifier-mode rule."
+            )
+        return TrainedPostureClassifier(
+            model_path=str(classifier_path),
+            sleep_threshold=0.55,
+            persist_seconds=0.0,
+            min_box_area_ratio=0.02,
+            min_keypoints=5,
+        )
+    return SleepPoseClassifier(
+        sleep_threshold=0.55,
+        persist_seconds=0.0,
+        min_box_area_ratio=0.02,
+        min_keypoints=5,
+    )
+
+
 def run_live_compare(args: argparse.Namespace, device: str) -> int:
     cap = cv2.VideoCapture(0 if args.source.isdigit() else args.source)
     if not cap.isOpened():
@@ -373,19 +407,18 @@ def run_live_compare(args: argparse.Namespace, device: str) -> int:
     current_scale = args.scale
     models = load_comparison_models(current_scale, device)
     classifiers = {
-        family: SleepPoseClassifier(
-            sleep_threshold=0.55,
-            persist_seconds=0.0,
-            min_box_area_ratio=0.02,
-            min_keypoints=5,
-        )
+        family: make_posture_classifier(args)
         for family in ["YOLOv8", "YOLO11", "YOLO26"]
     }
     window_name = "YOLO Pose Version Comparison"
     window_ready = False
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-    print("[INFO] Live compare controls: 1=n, 2=s, 3=m, 4=l, 5=x, or n/s/m/l/x. Press q or ESC to quit.")
+    print(
+        "[INFO] Live compare controls: 1=n, 2=s, 3=m, 4=l, 5=x, or n/s/m/l/x. "
+        "Press q or ESC to quit."
+    )
+    print(f"[INFO] Posture labeler: {args.classifier_mode}")
 
     while True:
         ok, frame = cap.read()
@@ -427,12 +460,7 @@ def run_live_compare(args: argparse.Namespace, device: str) -> int:
                     print(f"[INFO] Switching comparison scale: {current_scale} -> {next_scale}")
                     models = load_comparison_models(next_scale, device)
                     classifiers = {
-                        family: SleepPoseClassifier(
-                            sleep_threshold=0.55,
-                            persist_seconds=0.0,
-                            min_box_area_ratio=0.02,
-                            min_keypoints=5,
-                        )
+                        family: make_posture_classifier(args)
                         for family in ["YOLOv8", "YOLO11", "YOLO26"]
                     }
                     current_scale = next_scale

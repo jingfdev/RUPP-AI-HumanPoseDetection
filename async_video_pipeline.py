@@ -7,10 +7,12 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 import cv2
 import numpy as np
+import pandas as pd
 
 
 # COCO keypoint indices used by YOLO pose models.
@@ -185,6 +187,138 @@ class SleepPoseClassifier:
         return np.mean(np.asarray(points, dtype=np.float32), axis=0)
 
 
+class TrainedPostureClassifier(SleepPoseClassifier):
+    """Normal/Sleeping classifier trained from YOLO pose geometry features."""
+
+    def __init__(
+        self,
+        model_path: str,
+        sleep_threshold: float,
+        persist_seconds: float,
+        min_box_area_ratio: float,
+        min_keypoints: int,
+    ) -> None:
+        super().__init__(sleep_threshold, persist_seconds, min_box_area_ratio, min_keypoints)
+        import joblib
+
+        artifact = joblib.load(model_path)
+        self.model = artifact["model"]
+        self.feature_columns = artifact["feature_columns"]
+        self.labels = artifact.get("labels", ["normal", "sleeping"])
+        self.model_path = model_path
+
+    def classify(self, result, now: float, frame_shape: Tuple[int, int, int]) -> List[PoseLabel]:
+        if result.boxes is None or result.keypoints is None:
+            return []
+
+        boxes = result.boxes.xyxy.cpu().numpy()
+        keypoints = result.keypoints.xy.cpu().numpy()
+        confidences = self._keypoint_confidences(result)
+        labels: List[PoseLabel] = []
+        frame_area = float(frame_shape[0] * frame_shape[1])
+
+        valid_indices = self._valid_person_indices(boxes, confidences, frame_area)
+        for person_index in valid_indices:
+            box = boxes[person_index]
+            if person_index >= len(keypoints):
+                continue
+
+            features = self._feature_dict(keypoints[person_index], confidences[person_index], box, frame_area)
+            vector = pd.DataFrame([[features[column] for column in self.feature_columns]], columns=self.feature_columns)
+            predicted = str(self.model.predict(vector)[0])
+            sleeping_score = self._sleeping_probability(vector, predicted)
+            track_id = self._track_id(box, person_index)
+
+            previous_label = self._track_labels.get(track_id, "Normal")
+            sleeping_candidate = predicted == "sleeping" and sleeping_score >= self.sleep_threshold
+            if sleeping_candidate:
+                self._track_sleep_started_at.setdefault(track_id, now)
+                sleeping_long_enough = now - self._track_sleep_started_at[track_id] >= self.persist_seconds
+                label = "Sleeping" if sleeping_long_enough or previous_label == "Sleeping" else "Normal"
+            else:
+                self._track_sleep_started_at.pop(track_id, None)
+                label = "Normal"
+
+            self._track_labels[track_id] = label
+            color = (0, 0, 255) if label == "Sleeping" else (0, 255, 0)
+            x1, y1, x2, y2 = [int(v) for v in box]
+            labels.append(PoseLabel(label, sleeping_score, (x1, y1, x2, y2), color, "trained classifier"))
+
+        return labels
+
+    def _sleeping_probability(self, vector: pd.DataFrame, predicted: str) -> float:
+        if hasattr(self.model, "predict_proba"):
+            probabilities = self.model.predict_proba(vector)[0]
+            classes = [str(value) for value in self.model.classes_]
+            if "sleeping" in classes:
+                return float(probabilities[classes.index("sleeping")])
+        return 1.0 if predicted == "sleeping" else 0.0
+
+    def _feature_dict(
+        self,
+        kp: np.ndarray,
+        conf: np.ndarray,
+        box: np.ndarray,
+        frame_area: float,
+    ) -> Dict[str, float]:
+        x1, y1, x2, y2 = box
+        box_w = max(1.0, float(x2 - x1))
+        box_h = max(1.0, float(y2 - y1))
+        box_area = box_w * box_h
+
+        head = self._mean_point(kp, conf, [NOSE, LEFT_EYE, RIGHT_EYE])
+        shoulders = self._mean_point(kp, conf, [LEFT_SHOULDER, RIGHT_SHOULDER])
+        hips = self._mean_point(kp, conf, [LEFT_HIP, RIGHT_HIP])
+        wrists = self._mean_point(kp, conf, [LEFT_WRIST, RIGHT_WRIST])
+        elbows = self._mean_point(kp, conf, [LEFT_ELBOW, RIGHT_ELBOW])
+
+        head_low_ratio = -1.0
+        if head is not None and shoulders is not None:
+            head_low_ratio = float((head[1] - shoulders[1]) / box_h)
+
+        torso_angle_abs = -1.0
+        torso_vertical_span = -1.0
+        if shoulders is not None and hips is not None:
+            torso_vec = hips - shoulders
+            torso_angle_abs = abs(float(np.degrees(np.arctan2(torso_vec[1], torso_vec[0]))))
+            torso_vertical_span = float(abs(hips[1] - shoulders[1]) / box_h)
+
+        head_to_hips_y = -1.0
+        if head is not None and hips is not None:
+            head_to_hips_y = float((head[1] - hips[1]) / box_h)
+
+        return {
+            "box_area_ratio": float(box_area / max(1.0, frame_area)),
+            "box_aspect_ratio": float(box_w / box_h),
+            "visible_keypoints": float(np.count_nonzero(conf >= 0.25)),
+            "head_low_ratio": head_low_ratio,
+            "torso_angle_abs": torso_angle_abs,
+            "torso_vertical_span": torso_vertical_span,
+            "head_to_wrists": self._normalized_distance(head, wrists, max(box_w, box_h)),
+            "head_to_elbows": self._normalized_distance(head, elbows, max(box_w, box_h)),
+            "shoulder_slope": self._pair_slope(kp, conf, LEFT_SHOULDER, RIGHT_SHOULDER, box_h),
+            "hip_slope": self._pair_slope(kp, conf, LEFT_HIP, RIGHT_HIP, box_h),
+            "shoulder_width_ratio": self._pair_width(kp, conf, LEFT_SHOULDER, RIGHT_SHOULDER, box_w),
+            "hip_width_ratio": self._pair_width(kp, conf, LEFT_HIP, RIGHT_HIP, box_w),
+            "head_to_hips_y": head_to_hips_y,
+        }
+
+    def _normalized_distance(self, a: np.ndarray | None, b: np.ndarray | None, scale: float) -> float:
+        if a is None or b is None:
+            return -1.0
+        return float(np.linalg.norm(a - b) / max(1.0, scale))
+
+    def _pair_slope(self, kp: np.ndarray, conf: np.ndarray, left: int, right: int, box_h: float) -> float:
+        if conf[left] < 0.25 or conf[right] < 0.25:
+            return -1.0
+        return float((kp[right][1] - kp[left][1]) / max(1.0, box_h))
+
+    def _pair_width(self, kp: np.ndarray, conf: np.ndarray, left: int, right: int, box_w: float) -> float:
+        if conf[left] < 0.25 or conf[right] < 0.25:
+            return -1.0
+        return float(abs(kp[right][0] - kp[left][0]) / max(1.0, box_w))
+
+
 def draw_pose_labels(
     frame: np.ndarray,
     labels: List[PoseLabel],
@@ -283,6 +417,8 @@ def run_async(
     model_path: str,
     device: str,
     conf: float,
+    classifier_mode: str,
+    posture_classifier_path: str,
     sleep_threshold: float,
     sleep_persist: float,
     min_box_area_ratio: float,
@@ -302,12 +438,29 @@ def run_async(
         raise RuntimeError("Failed to open video source.")
 
     model = YOLO(model_path)
-    pose_classifier = SleepPoseClassifier(
-        sleep_threshold=sleep_threshold,
-        persist_seconds=sleep_persist,
-        min_box_area_ratio=min_box_area_ratio,
-        min_keypoints=min_keypoints,
-    )
+    if classifier_mode == "trained":
+        classifier_file = Path(posture_classifier_path)
+        if not classifier_file.exists():
+            raise RuntimeError(
+                f"Trained posture classifier not found: {posture_classifier_path}. "
+                "Use --classifier-mode rule or train the classifier first."
+            )
+        pose_classifier = TrainedPostureClassifier(
+            model_path=str(classifier_file),
+            sleep_threshold=sleep_threshold,
+            persist_seconds=sleep_persist,
+            min_box_area_ratio=min_box_area_ratio,
+            min_keypoints=min_keypoints,
+        )
+        print(f"[INFO] Loaded trained posture classifier: {classifier_file}")
+    else:
+        pose_classifier = SleepPoseClassifier(
+            sleep_threshold=sleep_threshold,
+            persist_seconds=sleep_persist,
+            min_box_area_ratio=min_box_area_ratio,
+            min_keypoints=min_keypoints,
+        )
+        print("[INFO] Using rule-based posture classifier")
     frame_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=1)
     result_queue: queue.Queue[Tuple[np.ndarray, float]] = queue.Queue(maxsize=1)
     stop_event = threading.Event()
@@ -419,6 +572,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda:0", help="CUDA device only, for example cuda or cuda:0")
     parser.add_argument("--conf", type=float, default=0.35, help="Detection confidence threshold.")
     parser.add_argument(
+        "--classifier-mode",
+        choices=["trained", "rule"],
+        default="trained",
+        help="Use the trained Normal/Sleeping classifier or the older rule-based classifier.",
+    )
+    parser.add_argument(
+        "--posture-classifier",
+        default="posture_models/yolo11s_balanced_drop_confusing/best_posture_classifier.joblib",
+        help="Path to the trained posture classifier artifact.",
+    )
+    parser.add_argument(
         "--sleep-threshold",
         type=float,
         default=0.55,
@@ -469,6 +633,8 @@ if __name__ == "__main__":
         args.model,
         selected_device,
         args.conf,
+        args.classifier_mode,
+        args.posture_classifier,
         args.sleep_threshold,
         args.sleep_persist,
         args.min_box_area_ratio,
