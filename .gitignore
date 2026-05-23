@@ -3,12 +3,15 @@ requirements_python.txt
 node_modules/
 run_comparison.bat
 setup.bat
-*/docs/
-*.md
-*.png
-*.txt
-*.pdf
-*.csv
+
+
+docs/
+presentation/
+report/
+src_video/
+benchmark_sample_video_result/
+
+
 script.js
 __pycache__/
 
