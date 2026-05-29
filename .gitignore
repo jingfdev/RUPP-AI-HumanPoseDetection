@@ -4,6 +4,9 @@ node_modules/
 run_comparison.bat
 setup.bat
 
+benchmark_final_result/
+presentation_assets/
+
 
 docs/
 presentation/

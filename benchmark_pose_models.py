@@ -203,6 +203,17 @@ def parse_args() -> argparse.Namespace:
         default="posture_models/yolo11s_balanced_drop_confusing/best_posture_classifier.joblib",
         help="Path to the trained Normal/Sleeping classifier used by live-compare mode.",
     )
+    parser.add_argument(
+        "--loop-video",
+        action="store_true",
+        help="Loop video file sources in live-compare mode instead of closing when the file ends.",
+    )
+    parser.add_argument(
+        "--playback-fps",
+        type=float,
+        default=8.0,
+        help="Display pacing for video file sources in live-compare mode. Webcam sources ignore this.",
+    )
     return parser.parse_args()
 
 
@@ -400,9 +411,11 @@ def make_posture_classifier(args: argparse.Namespace) -> SleepPoseClassifier:
 
 
 def run_live_compare(args: argparse.Namespace, device: str) -> int:
-    cap = cv2.VideoCapture(0 if args.source.isdigit() else args.source)
+    is_webcam = args.source.isdigit()
+    cap = cv2.VideoCapture(0 if is_webcam else args.source)
     if not cap.isOpened():
         raise RuntimeError(f"Failed to open live comparison source: {args.source}")
+    video_frame_delay = 1.0 / max(1.0, args.playback_fps) if not is_webcam else 0.0
 
     current_scale = args.scale
     models = load_comparison_models(current_scale, device)
@@ -423,8 +436,12 @@ def run_live_compare(args: argparse.Namespace, device: str) -> int:
     while True:
         ok, frame = cap.read()
         if not ok:
+            if args.loop_video and not is_webcam:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
             break
 
+        frame_started_at = time.time()
         panels: List[np.ndarray] = []
         now = time.time()
         for family, model in models.items():
@@ -464,6 +481,10 @@ def run_live_compare(args: argparse.Namespace, device: str) -> int:
                         for family in ["YOLOv8", "YOLO11", "YOLO26"]
                     }
                     current_scale = next_scale
+
+        if video_frame_delay > 0:
+            elapsed = time.time() - frame_started_at
+            time.sleep(max(0.0, video_frame_delay - elapsed))
 
     cap.release()
     cv2.destroyAllWindows()

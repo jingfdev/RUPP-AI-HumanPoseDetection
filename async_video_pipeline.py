@@ -426,6 +426,8 @@ def run_async(
     show_score: bool,
     show_reason: bool,
     window_scale: float,
+    loop_video: bool,
+    playback_fps: float,
 ) -> None:
     from ultralytics import YOLO
 
@@ -433,9 +435,11 @@ def run_async(
         f"[INFO] Starting async pose demo | source={source} | model={model_path} | "
         f"device={device} | conf={conf}"
     )
-    cap = cv2.VideoCapture(0 if source.isdigit() else source)
+    is_webcam = source.isdigit()
+    cap = cv2.VideoCapture(0 if is_webcam else source)
     if not cap.isOpened():
         raise RuntimeError("Failed to open video source.")
+    video_frame_delay = 1.0 / max(1.0, playback_fps) if not is_webcam else 0.0
 
     model = YOLO(model_path)
     if classifier_mode == "trained":
@@ -472,6 +476,9 @@ def run_async(
         while not stop_event.is_set():
             ok, frame = cap.read()
             if not ok:
+                if loop_video and not is_webcam:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    continue
                 capture_done.set()
                 break
             if frame_queue.full():
@@ -480,6 +487,8 @@ def run_async(
                 except queue.Empty:
                     pass
             frame_queue.put(frame)
+            if video_frame_delay > 0:
+                time.sleep(video_frame_delay)
 
     def infer_loop() -> None:
         while not stop_event.is_set():
@@ -622,6 +631,17 @@ def parse_args() -> argparse.Namespace:
         default=1.25,
         help="Scale factor for the popup display window.",
     )
+    parser.add_argument(
+        "--loop-video",
+        action="store_true",
+        help="Loop video file sources instead of closing when the file ends.",
+    )
+    parser.add_argument(
+        "--playback-fps",
+        type=float,
+        default=15.0,
+        help="Display pacing for video file sources. Webcam sources ignore this.",
+    )
     return parser.parse_args()
 
 
@@ -642,5 +662,7 @@ if __name__ == "__main__":
         args.show_score,
         args.show_reason,
         args.window_scale,
+        args.loop_video,
+        args.playback_fps,
     )
 
